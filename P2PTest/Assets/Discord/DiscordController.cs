@@ -3,17 +3,18 @@ using System.Collections.Generic;
 using UnityEngine;
 using Discord;
 using UnityEngine.UI;
+using System.Threading.Tasks;
+using System.Threading;
 
 public class DiscordController : MonoBehaviour
 {
     public static Discord.Discord discord;
     public static Lobby lobby;
 
+    public static List<DiscordObj> objs = new List<DiscordObj>();
+
     private static LobbyManager lobbyManager;
     private static Discord.User user;
-
-
-    public Text Chat;
 
     // Start is called before the first frame update
     void Start()
@@ -49,20 +50,19 @@ public class DiscordController : MonoBehaviour
             var prem = u.GetCurrentUserPremiumType();
             user = usr;
             log($"User: {usr.Username}, {usr.Id} -- {prem}");
+            foreach(DiscordObj o in objs)
+            {
+                o.Discord = discord;
+                o.Ready(user);
+            }
         };
 
         var activityManager = discord.GetActivityManager();
-        activityManager.ClearActivity(x =>
-        {
-            Debug.Log(x);
-        });
-
-        log("Started.");
 
         activityManager.UpdateActivity(new Activity()
         {
-            State = "test",
-            Details = "whatever"
+            State = "Hub",
+            Details = "Searching for lobbies"
         }, x =>
         {
             Debug.Log(x);
@@ -71,10 +71,8 @@ public class DiscordController : MonoBehaviour
         activityManager.OnActivityJoin += ActivityManager_OnActivityJoin;
         activityManager.OnActivityInvite += ActivityManager_OnActivityInvite;
         activityManager.OnActivityJoinRequest += ActivityManager_OnActivityJoinRequest;
-
-        lobbyManager = discord.GetLobbyManager();
-        string file = "lobby.txt";
-#if UNITY_EDITOR
+        /*string file = "lobby.txt";
+#if !UNITY_EDITOR
         var txn = lobbyManager.GetLobbyCreateTransaction();
         txn.SetCapacity(2);
         txn.SetType(LobbyType.Public);
@@ -95,39 +93,25 @@ public class DiscordController : MonoBehaviour
             lobby = _lobby;
             log($"Joined {lobby.Id} owned by {lobby.OwnerId}");
             inLobby();
-            Send("Ping!");
+            foreach (DiscordObj o in objs)
+                o.JoinLobby(lobby);
         });
-#endif
+#endif*/
     }
 
-    void inLobby()
-    {
-        var n = discord.GetNetworkManager();
-        var lob = discord.GetLobbyManager();
-        /*lob.ConnectNetwork(lobby.Id);
-        lob.OpenNetworkChannel(lobby.Id, 0, true);*/
-        lob.OnLobbyMessage += Lob_OnLobbyMessage;
-        lob.OnNetworkMessage += Lob_OnNetworkMessage;
-    }
-
-    private void Lob_OnNetworkMessage(long lobbyId, long userId, byte channelId, byte[] data)
-    {
-        string text = System.Text.Encoding.UTF8.GetString(data);
-        log($"TEXT: {channelId} # {userId}: {text}");
-    }
-
-    public void log(string message)
+    public static void log(string message)
     {
         Debug.LogWarning(message);
         string fileName = "log_";
         try
         {
             fileName += user.Id.ToString();
-        } catch { fileName = "log"; }
+        }
+        catch { fileName = "log"; }
         System.IO.File.AppendAllText(fileName + ".txt", message + "\r\n");
     }
 
-    public void Send(string message)
+    public void LobbySend(string message)
     {
         log("Sending " + message);
         lobbyManager.SendLobbyMessage(lobby.Id, message, x =>
@@ -136,10 +120,41 @@ public class DiscordController : MonoBehaviour
         });
     }
 
-    private void Lob_OnLobbyMessage(long lobbyId, long userId, byte[] data)
+    class getUserValue
     {
-        string text = System.Text.Encoding.UTF8.GetString(data);
-        log($"From {userId}: {text}");
+        public AutoResetEvent Event;
+        public Result Result = Result.NotFetched;
+        public User User;
+        public getUserValue()
+        {
+            Event = new AutoResetEvent(false);
+        }
+    }
+
+    static Dictionary<long, getUserValue> getUserEvents = new Dictionary<long, getUserValue>();
+    public static User GetUser(long id)
+    {
+        getUserValue val;
+        if (getUserEvents.TryGetValue(id, out val))
+        {
+        } else
+        {
+            val = new getUserValue();
+            getUserEvents[id] = val;
+            var l = discord.GetUserManager();
+            l.GetUser(id, (Result res, ref User usr) =>
+            {
+                log($"Fetched {id}, result: {res}, name: {usr.Username ?? "<n/a"}");
+                if(getUserEvents.TryGetValue(usr.Id, out var thing))
+                {
+                    thing.Result = res;
+                    thing.User = usr;
+                    thing.Event.Set();
+                }
+            });
+        }
+        val.Event.WaitOne(5000);
+        return val.User;
     }
 
     /// <summary>
@@ -169,6 +184,7 @@ public class DiscordController : MonoBehaviour
     /// <param name="secret">the secret to join the user's game</param>
     private void ActivityManager_OnActivityJoin(string secret)
     {
+        
         throw new System.NotImplementedException();
     }
 
